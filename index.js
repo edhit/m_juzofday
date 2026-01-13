@@ -113,6 +113,54 @@ const juzPerDayKeyboard = Markup.keyboard([
   ["🏠 Главное меню"],
 ]).resize();
 
+// Функция для получения начальной и конечной страницы джуза
+function getJuzPageRange(juzNumber, lastMemorizedPage, isExtra = false) {
+  let startPage, endPage;
+
+  if (juzNumber === 1) {
+    // В первом джузе начинаем со 2-й страницы (пропускаем Фатиху)
+    startPage = 2;
+    if (isExtra) {
+      // Для дополнительного джуза берем полный джуз
+      endPage = 20;
+    } else {
+      // Для базового джуза только выученные страницы
+      endPage = Math.min(20, lastMemorizedPage);
+    }
+  } else if (juzNumber === 30) {
+    // В 30-м джузе читаем до конца (604 страницы)
+    startPage = (juzNumber - 1) * PAGES_IN_JUZ + 1;
+    endPage = TOTAL_PAGES;
+
+    if (!isExtra && lastMemorizedPage < TOTAL_PAGES) {
+      endPage = Math.min(TOTAL_PAGES, lastMemorizedPage);
+    }
+  } else {
+    // Остальные джузы
+    startPage = (juzNumber - 1) * PAGES_IN_JUZ + 1;
+    endPage = juzNumber * PAGES_IN_JUZ;
+
+    if (!isExtra) {
+      endPage = Math.min(endPage, lastMemorizedPage);
+    }
+  }
+
+  return { startPage, endPage };
+}
+
+// Функция для проверки, полностью ли выучен джуз
+function isJuzFullyMemorized(juzNumber, lastMemorizedPage, isExtra = false) {
+  if (isExtra) return true; // Дополнительные джузы всегда считаются полностью выученными
+
+  if (juzNumber === 1) {
+    return lastMemorizedPage >= 20; // Первый джуз выучен, если достигли 20 стр
+  } else if (juzNumber === 30) {
+    return lastMemorizedPage >= TOTAL_PAGES; // 30-й джуз выучен, если достигли конца
+  } else {
+    return lastMemorizedPage >= juzNumber * PAGES_IN_JUZ;
+  }
+}
+
 // Функции для работы с джузами
 function getExtraJuzList(extraJuzString) {
   if (!extraJuzString || extraJuzString === "[]") return [];
@@ -125,7 +173,7 @@ function getExtraJuzList(extraJuzString) {
 
 function getJuzForToday(
   lastJuzUsed,
-  baseJuzCount,
+  lastMemorizedPage,
   extraJuzList,
   juzPerDay = 1
 ) {
@@ -134,18 +182,24 @@ function getJuzForToday(
     let currentJuz = lastJuzUsed;
     let currentIsExtra = extraJuzList.includes(currentJuz);
 
-    for (let i = 0; i < juzPerDay; i++) {
-      const nextJuz = getNextJuz(
-        currentJuz,
-        currentIsExtra,
-        baseJuzCount,
+    // Получаем следующий джуз
+    let nextJuzInfo = getNextJuz(
+      currentJuz,
+      currentIsExtra,
+      lastMemorizedPage,
+      extraJuzList
+    );
+
+    for (let i = 0; i < juzPerDay && nextJuzInfo; i++) {
+      todayJuzList.push(nextJuzInfo);
+
+      // Получаем следующий джуз
+      nextJuzInfo = getNextJuz(
+        nextJuzInfo.number,
+        nextJuzInfo.isExtra,
+        lastMemorizedPage,
         extraJuzList
       );
-      if (!nextJuz) break;
-
-      todayJuzList.push(nextJuz);
-      currentJuz = nextJuz.number;
-      currentIsExtra = nextJuz.isExtra;
     }
 
     return todayJuzList;
@@ -155,21 +209,44 @@ function getJuzForToday(
   }
 }
 
-function getNextJuz(currentJuz, currentIsExtra, baseJuzCount, extraJuzList) {
+function getNextJuz(
+  currentJuz,
+  currentIsExtra,
+  lastMemorizedPage,
+  extraJuzList
+) {
   try {
+    const baseJuzCount = calculateBaseJuzCount(lastMemorizedPage);
+
     if (currentIsExtra) {
+      // Если текущий джуз дополнительный
       const currentIndex = extraJuzList.indexOf(currentJuz);
       if (currentIndex < extraJuzList.length - 1) {
+        // Есть следующий дополнительный
         return { number: extraJuzList[currentIndex + 1], isExtra: true };
       } else {
-        return baseJuzCount > 0 ? { number: 1, isExtra: false } : null;
+        // Дополнительные закончились, переходим к базовым
+        if (baseJuzCount > 0) {
+          return { number: 1, isExtra: false };
+        } else if (extraJuzList.length > 0) {
+          // Если нет базовых, начинаем дополнительные сначала
+          return { number: extraJuzList[0], isExtra: true };
+        } else {
+          return null; // Нет джузов вообще
+        }
       }
     } else {
+      // Если текущий джуз базовый
       if (currentJuz >= baseJuzCount) {
-        return extraJuzList.length > 0
-          ? { number: extraJuzList[0], isExtra: true }
-          : { number: 1, isExtra: false };
+        // Базовые закончились, переходим к дополнительным
+        if (extraJuzList.length > 0) {
+          return { number: extraJuzList[0], isExtra: true };
+        } else {
+          // Нет дополнительных, начинаем базовые сначала
+          return baseJuzCount > 0 ? { number: 1, isExtra: false } : null;
+        }
       } else {
+        // Продолжаем базовые
         return { number: currentJuz + 1, isExtra: false };
       }
     }
@@ -177,6 +254,24 @@ function getNextJuz(currentJuz, currentIsExtra, baseJuzCount, extraJuzList) {
     console.error("Ошибка в getNextJuz:", error);
     return null;
   }
+}
+
+// Функция для расчета количества выученных базовых джузов
+function calculateBaseJuzCount(lastMemorizedPage) {
+  if (lastMemorizedPage === 0) return 0;
+
+  if (lastMemorizedPage >= TOTAL_PAGES) {
+    // Выучен весь Коран - 30 джузов
+    return 30;
+  }
+
+  if (lastMemorizedPage <= 20) {
+    // Первый джуз (со 2-й страницы)
+    return lastMemorizedPage >= 20 ? 1 : 0;
+  }
+
+  // Для остальных случаев
+  return Math.floor((lastMemorizedPage - 1) / PAGES_IN_JUZ);
 }
 
 async function sendDailyQuranPlan(ctx) {
@@ -192,14 +287,13 @@ async function sendDailyQuranPlan(ctx) {
     await recordDailyStats(user, lastMemorizedPage, extraJuzList, juzPerDay);
 
     // Вычисляем джузы
-    const knownJuzByPages = Math.floor(lastMemorizedPage / PAGES_IN_JUZ);
-    const baseJuzCount = knownJuzByPages;
+    const baseJuzCount = calculateBaseJuzCount(lastMemorizedPage);
     const totalKnownJuz = baseJuzCount + extraJuzList.length;
 
     // Получаем джузы на сегодня
     const todayJuzList = getJuzForToday(
       lastJuzUsed,
-      baseJuzCount,
+      lastMemorizedPage,
       extraJuzList,
       juzPerDay
     );
@@ -227,28 +321,47 @@ async function sendDailyQuranPlan(ctx) {
     // Собираем все страницы
     let allPages = [];
     todayJuzList.forEach((juzInfo) => {
-      let startPage, endPage;
+      const { startPage, endPage } = getJuzPageRange(
+        juzInfo.number,
+        lastMemorizedPage,
+        juzInfo.isExtra
+      );
 
-      if (juzInfo.isExtra) {
-        startPage = (juzInfo.number - 1) * PAGES_IN_JUZ + 1;
-        endPage = juzInfo.number * PAGES_IN_JUZ;
-      } else {
-        startPage = (juzInfo.number - 1) * PAGES_IN_JUZ + 1;
-        endPage = Math.min(juzInfo.number * PAGES_IN_JUZ, lastMemorizedPage);
-      }
-
-      for (let page = startPage; page <= endPage; page++) {
-        allPages.push({
-          page: page,
-          juz: juzInfo.number,
-          isExtra: juzInfo.isExtra,
-        });
+      // Добавляем только если есть страницы
+      if (startPage <= endPage) {
+        for (let page = startPage; page <= endPage; page++) {
+          allPages.push({
+            page: page,
+            juz: juzInfo.number,
+            isExtra: juzInfo.isExtra,
+          });
+        }
       }
     });
 
-    // Ограничиваем количество страниц
-    const PAGES_PER_DAY = 20 * juzPerDay;
+    // Ограничиваем количество страниц (20 страниц на джуз)
+    const PAGES_PER_DAY = PAGES_IN_JUZ * juzPerDay;
     allPages = allPages.slice(0, PAGES_PER_DAY);
+
+    // Если нет страниц для повторения
+    if (allPages.length === 0) {
+      const message = `
+📅 План на сегодня
+
+🎯 Нет страниц для повторения.
+
+📊 Ваш прогресс:
+• Выучено страниц: ${lastMemorizedPage}/${TOTAL_PAGES}
+• Всего джузов: ${totalKnownJuz}/30
+
+Продолжайте учить новые страницы!
+      `;
+
+      const sentMessage = await ctx.reply(message, mainKeyboard);
+      user.dailyPlanMessageId = sentMessage.message_id;
+      await user.save();
+      return;
+    }
 
     // Распределяем по намазам
     const namazPlan = [];
@@ -271,23 +384,32 @@ async function sendDailyQuranPlan(ctx) {
       }
     }
 
-    // Формируем УПРОЩЕННОЕ сообщение плана
-    const namazPlanMessage = namazPlan
-      .map((item) => `${item.name}: стр. ${item.from}–${item.to}`)
-      .join("\n");
-
     // Формируем номера джузов
     const juzNumbers = todayJuzList
-      .map((juz) => (juz.isExtra ? `${juz.number} (доп.)` : juz.number))
+      .map((juz) => {
+        if (juz.isExtra) {
+          return `${juz.number} (доп.)`;
+        }
+
+        // Проверяем, полностью ли выучен базовый джуз
+        const isFullyMemorized = isJuzFullyMemorized(
+          juz.number,
+          lastMemorizedPage,
+          false
+        );
+        return isFullyMemorized ? `${juz.number}` : `${juz.number} (частично)`;
+      })
       .join(", ");
 
     // УПРОЩЕННОЕ сообщение плана
     const message = `📅 План на сегодня
 
 🎯 Джузы: ${juzNumbers}
-📄 Всего страниц: ${allPages.length}
+📄 Страниц: ${allPages.length}
 
-${namazPlanMessage}
+${namazPlan
+  .map((item) => `${item.name}: стр. ${item.from}–${item.to}`)
+  .join("\n")}
 
 📊 Прогресс: ${lastMemorizedPage}/${TOTAL_PAGES} стр.
 🎯 Джузов: ${totalKnownJuz}/30`;
@@ -344,7 +466,7 @@ async function recordDailyStats(
 ) {
   try {
     const today = moment().format("YYYY-MM-DD");
-    const baseJuzCount = Math.floor(lastMemorizedPage / 20);
+    const baseJuzCount = calculateBaseJuzCount(lastMemorizedPage);
     const totalJuzCount = baseJuzCount + extraJuzList.length;
 
     // Получаем вчерашнюю статистику
@@ -358,7 +480,7 @@ async function recordDailyStats(
 
     const previousPages = yesterdayStat ? yesterdayStat.pagesMemorized : 0;
     const progressToday = lastMemorizedPage - previousPages;
-    const pagesRepeatedToday = 20 * juzPerDay;
+    const pagesRepeatedToday = PAGES_IN_JUZ * juzPerDay;
 
     // Создаем или обновляем запись за сегодня
     await DailyStat.upsert({
@@ -437,6 +559,42 @@ async function getUser(telegramId) {
   }
 }
 
+// Функция для получения информации о текущем прогрессе в джузе
+function getCurrentJuzProgress(lastMemorizedPage) {
+  if (lastMemorizedPage === 0) {
+    return { juzNumber: 1, pagesInJuz: 0, totalPagesInJuz: 19 }; // 19 потому что 1-я страница пропускается
+  }
+
+  if (lastMemorizedPage >= TOTAL_PAGES) {
+    return { juzNumber: 30, pagesInJuz: 14, totalPagesInJuz: 14 }; // В 30-м джузе 14 страниц (591-604)
+  }
+
+  let juzNumber, pagesInJuz, totalPagesInJuz;
+
+  if (lastMemorizedPage <= 20) {
+    // Первый джуз
+    juzNumber = 1;
+    pagesInJuz = Math.max(0, lastMemorizedPage - 1); // Минус первая страница
+    totalPagesInJuz = 19;
+  } else {
+    // Остальные джузы
+    juzNumber = Math.floor((lastMemorizedPage - 1) / PAGES_IN_JUZ);
+
+    if (juzNumber === 30) {
+      // 30-й джуз
+      const startPage30 = 29 * PAGES_IN_JUZ + 1; // 581
+      pagesInJuz = lastMemorizedPage - startPage30 + 1;
+      totalPagesInJuz = TOTAL_PAGES - startPage30 + 1; // 24 страницы (581-604)
+    } else {
+      const startPage = (juzNumber - 1) * PAGES_IN_JUZ + 1;
+      pagesInJuz = lastMemorizedPage - startPage + 1;
+      totalPagesInJuz = PAGES_IN_JUZ;
+    }
+  }
+
+  return { juzNumber, pagesInJuz, totalPagesInJuz };
+}
+
 // Инициализация бота
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -463,10 +621,11 @@ bot.start(async (ctx) => {
 
 Я помогу вам планировать повторение Корана.
 
-📚 Что умею:
-• Создавать ежедневный план повторения
-• Вести статистику прогресса
-• Распределять страницы по намазам
+📚 Особенности:
+• Учитываю, что 1-я страница (Фатиха) пропускается
+• В 30-м джузе читаем до 604 страницы
+• Создаю ежедневный план повторения
+• Веду статистику прогресса
 
 🎯 Начните с кнопки "➕ Добавить страницу"!
 
@@ -555,16 +714,18 @@ bot.on("text", async (ctx) => {
 async function addOnePage(ctx) {
   try {
     const user = ctx.user;
-    const newPageCount = Math.min(user.lastMemorizedPage + 1, TOTAL_PAGES);
+    const currentPage = user.lastMemorizedPage;
 
-    if (newPageCount === user.lastMemorizedPage) {
+    // Проверяем, не достигли ли мы конца Корана
+    if (currentPage >= TOTAL_PAGES) {
       await ctx.reply(
-        `🎉 Поздравляем! Вы уже выучили все ${TOTAL_PAGES} страниц!`,
+        `🎉 Поздравляем! Вы выучили весь Коран - все ${TOTAL_PAGES} страниц!`,
         mainKeyboard
       );
       return;
     }
 
+    const newPageCount = currentPage + 1;
     user.lastMemorizedPage = newPageCount;
     await user.save();
 
@@ -576,23 +737,43 @@ async function addOnePage(ctx) {
       user.juzPerDay
     );
 
-    const baseJuzCount = Math.floor(newPageCount / 20);
+    // Получаем информацию о текущем прогрессе в джузе
+    const { juzNumber, pagesInJuz, totalPagesInJuz } =
+      getCurrentJuzProgress(newPageCount);
+
+    const baseJuzCount = calculateBaseJuzCount(newPageCount);
     const totalJuzCount =
       baseJuzCount + getExtraJuzList(user.extraJuzList).length;
 
-    const message = `
-✅ Добавлена 1 страница
+    let message = "";
+
+    if (juzNumber === 30 && pagesInJuz === totalPagesInJuz) {
+      message = `🎉 МАШААЛЛАХ! Вы завершили 30-й джуз и весь Коран!\n\n`;
+    } else if (pagesInJuz === totalPagesInJuz) {
+      message = `🎉 МАШААЛЛАХ! Вы завершили джуз ${juzNumber}!\n\n`;
+    }
+
+    message += `✅ Добавлена 1 страница
 
 📊 Ваш прогресс:
 • Страниц: ${newPageCount}/${TOTAL_PAGES}
 • Джузов: ${totalJuzCount}/30
 
-🎯 Теперь выучили: ${newPageCount % 20 || 20}/20 стр. в джузе ${
-      baseJuzCount + 1
+🎯 Джуз ${juzNumber}: ${pagesInJuz}/${totalPagesInJuz} стр.`;
+
+    // Добавляем информацию о следующем джузе
+    if (pagesInJuz === totalPagesInJuz && juzNumber < 30) {
+      const nextJuz = juzNumber + 1;
+      if (nextJuz === 1) {
+        message += `\n\n📖 Следующий: джуз 1 (со 2-й страницы)`;
+      } else if (nextJuz === 30) {
+        message += `\n\n📖 Следующий: джуз 30 (до 604 стр.)`;
+      } else {
+        message += `\n\n📖 Следующий: джуз ${nextJuz}`;
+      }
     }
 
-📅 Используйте "План на сегодня" для обновления плана повторения
-    `;
+    message += `\n\n📅 Используйте "План на сегодня" для обновления плана повторения`;
 
     await ctx.reply(message, mainKeyboard);
   } catch (error) {
@@ -609,8 +790,13 @@ async function showStatistics(ctx) {
   try {
     const user = ctx.user;
     const extraJuzList = getExtraJuzList(user.extraJuzList);
-    const baseJuzCount = Math.floor(user.lastMemorizedPage / 20);
+    const baseJuzCount = calculateBaseJuzCount(user.lastMemorizedPage);
     const totalJuzCount = baseJuzCount + extraJuzList.length;
+
+    // Получаем прогресс в текущем джузе
+    const { juzNumber, pagesInJuz, totalPagesInJuz } = getCurrentJuzProgress(
+      user.lastMemorizedPage
+    );
 
     const stats = await getStatsSummary(user);
 
@@ -623,6 +809,8 @@ async function showStatistics(ctx) {
 • Доп. джузов: ${extraJuzList.length}
 • Всего джузов: ${totalJuzCount}/30
 • Джузов в день: ${user.juzPerDay}
+
+🎯 Текущий джуз ${juzNumber}: ${pagesInJuz}/${totalPagesInJuz} стр.
 
 ${stats}
     `;
@@ -640,12 +828,19 @@ async function showSettings(ctx) {
     const user = ctx.user;
     const extraJuzList = getExtraJuzList(user.extraJuzList);
 
+    // Получаем прогресс в текущем джузе
+    const { juzNumber, pagesInJuz, totalPagesInJuz } = getCurrentJuzProgress(
+      user.lastMemorizedPage
+    );
+
     const message = `
 ⚙️ Настройки
 
 📄 Выучено: ${user.lastMemorizedPage} стр.
 🎯 Джузов в день: ${user.juzPerDay}
 📚 Доп. джузы: ${extraJuzList.length > 0 ? extraJuzList.join(", ") : "нет"}
+
+🎯 Текущий джуз ${juzNumber}: ${pagesInJuz}/${totalPagesInJuz} стр.
 
 Выберите параметр для изменения:
     `;
@@ -660,8 +855,9 @@ async function showSettings(ctx) {
 // Функция запроса обновления страниц
 async function askForPagesUpdate(ctx) {
   try {
+    const user = ctx.user;
     await ctx.reply(
-      "Введите количество выученных страниц (от 1 до 604):",
+      `Введите количество выученных страниц (от 1 до ${TOTAL_PAGES}):\n\nТекущее: ${user.lastMemorizedPage} стр.`,
       Markup.removeKeyboard()
     );
   } catch (error) {
@@ -674,7 +870,7 @@ async function askForPagesUpdate(ctx) {
 async function updatePages(ctx, pages) {
   try {
     if (isNaN(pages) || pages < 0 || pages > TOTAL_PAGES) {
-      await ctx.reply("Введите число от 0 до 604", mainKeyboard);
+      await ctx.reply(`Введите число от 0 до ${TOTAL_PAGES}`, mainKeyboard);
       return;
     }
 
@@ -702,12 +898,13 @@ async function askForExtraJuz(ctx) {
     const user = ctx.user;
     const extraJuzList = getExtraJuzList(user.extraJuzList);
 
-    let message =
-      "Введите номера дополнительных джузов через запятую (например: 5, 10, 15):";
+    let message = `Введите номера дополнительных джузов через запятую (1-30):`;
 
     if (extraJuzList.length > 0) {
       message += `\n\nТекущие доп. джузы: ${extraJuzList.join(", ")}`;
     }
+
+    message += `\n\nПример: 5, 10, 15\nОставьте пустым, чтобы удалить все`;
 
     await ctx.reply(message, Markup.removeKeyboard());
   } catch (error) {
@@ -753,7 +950,7 @@ async function updateExtraJuz(ctx, text) {
 async function askForJuzPerDay(ctx) {
   try {
     await ctx.reply(
-      "Сколько джузов вы хотите повторять в день?",
+      "Сколько джузов вы хотите повторять в день?\n\nРекомендуется: 1-2 джуза",
       juzPerDayKeyboard
     );
   } catch (error) {
@@ -772,7 +969,11 @@ async function setJuzPerDay(ctx, text) {
       await ctx.user.save();
 
       await ctx.reply(
-        `✅ Установлено ${juzPerDay} джуз${juzPerDay === 1 ? "" : "а"} в день`,
+        `✅ Установлено ${juzPerDay} джуз${
+          juzPerDay === 1 ? "" : "а"
+        } в день\n\nТеперь будете повторять примерно ${
+          juzPerDay * PAGES_IN_JUZ
+        } страниц в день.`,
         mainKeyboard
       );
     } else {
