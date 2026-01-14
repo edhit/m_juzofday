@@ -11,7 +11,7 @@ const sequelize = new Sequelize({
   logging: false,
 });
 
-// Модель пользователя с добавлением поля для отслеживания даты последнего плана
+// Модель пользователя
 const User = sequelize.define("User", {
   telegramId: {
     type: DataTypes.BIGINT,
@@ -54,7 +54,44 @@ const User = sequelize.define("User", {
     type: DataTypes.DATEONLY,
     allowNull: true,
   },
+  settingsMenuOpen: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
 });
+
+const UserAction = sequelize.define("UserAction", {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
+  actionType: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  previousValue: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  newValue: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  previousExtraJuzList: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  newExtraJuzList: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  actionDate: {
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW,
+  },
+});
+
 
 // Модель статистики
 const DailyStat = sequelize.define("DailyStat", {
@@ -92,36 +129,60 @@ const DailyStat = sequelize.define("DailyStat", {
 User.hasMany(DailyStat, { foreignKey: "userId" });
 DailyStat.belongsTo(User, { foreignKey: "userId" });
 
+User.hasMany(UserAction, { foreignKey: "userId" });
+UserAction.belongsTo(User, { foreignKey: "userId" });
+
 // Константы
 const TOTAL_PAGES = 604;
 const PAGES_IN_JUZ = 20;
 
-// Главная клавиатура с кнопкой "+1 страница"
+// 🎯 ОСНОВНОЙ ИНТЕРФЕЙС - только самое важное
 const mainKeyboard = Markup.keyboard([
-  ["📅 План на сегодня", "📊 Статистика"],
-  ["➕ Добавить страницу", "⚙️ Настройки"],
-  ["📝 Доп. джузы", "🎯 Джузов в день"],
+  ["📅 План на сегодня"],
+  ["➕ Добавить страницу"],
+  ["↩️ Отменить", "⚙️ Дополнительно"],
 ]).resize();
 
-// Клавиатура настроек
+// 📊 МЕНЮ СТАТИСТИКИ
+const statsKeyboard = Markup.keyboard([
+  ["📊 Моя статистика"],
+  ["📈 Прогресс за неделю"],
+  ["↩️ История действий", "📤 Экспорт данных"],
+  ["🏠 На главную"],
+]).resize();
+
+// Добавляем клавиатуру для управления историей
+const historyKeyboard = Markup.keyboard([
+  ["↩️ Отменить последнее"],
+  ["📋 История действий"],
+  ["⚙️ Назад в статистику"],
+]).resize();
+
+// ⚙️ НАСТРОЙКИ - аккуратно организованы
 const settingsKeyboard = Markup.keyboard([
-  ["🔄 Обновить страницы", "📝 Доп. джузы"],
-  ["🎯 Джузов в день", "📋 Экспорт статистики"],
-  ["🏠 Главное меню"],
+  ["📝 Мои страницы", "🎯 Джузы в день"],
+  ["📚 Доп. джузы", "🔄 Обновить всё"],
+  ["🏠 На главную"],
 ]).resize();
 
-// Клавиатура для работы с дополнительными джузами
-const extraJuzKeyboard = Markup.keyboard([
-  ["➕ Добавить джузы", "🗑️ Удалить джузы"],
-  ["📋 Список джузов", "❌ Очистить все"],
-  ["🏠 Главное меню"],
+// 📚 УПРАВЛЕНИЕ ДОП. ДЖУЗАМИ
+const juzManageKeyboard = Markup.keyboard([
+  ["➕ Добавить джуз", "🗑️ Удалить джуз"],
+  ["📋 Список джузов", "❌ Очистить всё"],
+  ["⚙️ Назад в настройки"],
 ]).resize();
 
-// Клавиатура для выбора количества джузов
-const juzPerDayKeyboard = Markup.keyboard([
-  ["1 джуз", "2 джуза", "3 джуза"],
-  ["4 джуза", "5 джузов"],
-  ["🏠 Главное меню"],
+// 🎯 ВЫБОР КОЛИЧЕСТВА ДЖУЗОВ
+const juzCountKeyboard = Markup.keyboard([
+  ["1", "2", "3"],
+  ["4", "5"],
+  ["⚙️ Назад в настройки"],
+]).resize();
+
+// 📝 ОБНОВЛЕНИЕ СТРАНИЦ
+const pagesUpdateKeyboard = Markup.keyboard([
+  ["📊 Текущий прогресс", "✏️ Изменить вручную"],
+  ["📈 Автоматический расчёт", "⚙️ Назад в настройки"],
 ]).resize();
 
 // Функция для получения начальной и конечной страницы джуза
@@ -276,17 +337,14 @@ async function shouldUpdatePlan(user) {
   try {
     const today = moment().format("YYYY-MM-DD");
 
-    // Если нет даты последнего плана - нужно обновить
     if (!user.lastPlanDate) {
       return true;
     }
 
-    // Если последний план был не сегодня - нужно обновить
     if (user.lastPlanDate !== today) {
       return true;
     }
 
-    // Если пользователь выучил новые страницы - нужно обновить
     const yesterday = moment().subtract(1, "day").format("YYYY-MM-DD");
     const yesterdayStat = await DailyStat.findOne({
       where: {
@@ -302,14 +360,14 @@ async function shouldUpdatePlan(user) {
       return true;
     }
 
-    // В остальных случаях - не нужно обновлять
     return false;
   } catch (error) {
     console.error("Ошибка в shouldUpdatePlan:", error);
-    return true; // При ошибке лучше обновить
+    return true;
   }
 }
 
+// 🎯 ОСНОВНАЯ ФУНКЦИЯ - ПЛАН НА СЕГОДНЯ (упрощенная)
 async function sendDailyQuranPlan(ctx) {
   try {
     const user = await getUser(ctx.from.id);
@@ -319,11 +377,14 @@ async function sendDailyQuranPlan(ctx) {
     const needsUpdate = await shouldUpdatePlan(user);
 
     if (!needsUpdate && user.lastPlanDate === today) {
-      // План на сегодня уже был отправлен, просто показываем существующий
-      await ctx.reply(
-        `📅 План на сегодня уже был сгенерирован ранее.\n\nЕсли хотите обновить план (например, после добавления новых страниц), нажмите "🔄 Обновить страницы" в настройках.`,
-        mainKeyboard
-      );
+      const message = `
+📅 *Ваш план на сегодня уже готов!*
+
+Если вы добавили новые страницы и хотите обновить план:
+1. Нажмите "⚙️ Дополнительно"
+2. Выберите "🔄 Обновить всё"
+      `;
+      await ctx.replyWithMarkdown(message, mainKeyboard);
       return;
     }
 
@@ -332,14 +393,10 @@ async function sendDailyQuranPlan(ctx) {
     const extraJuzList = getExtraJuzList(user.extraJuzList);
     const juzPerDay = user.juzPerDay || 1;
 
-    // Записываем статистику ТОЛЬКО если план обновляется впервые за день
+    // Записываем статистику
     if (needsUpdate) {
       await recordDailyStats(user, lastMemorizedPage, extraJuzList, juzPerDay);
     }
-
-    // Вычисляем джузы
-    const baseJuzCount = calculateBaseJuzCount(lastMemorizedPage);
-    const totalKnownJuz = baseJuzCount + extraJuzList.length;
 
     // Получаем джузы на сегодня
     const todayJuzList = getJuzForToday(
@@ -351,25 +408,26 @@ async function sendDailyQuranPlan(ctx) {
 
     // Если нет джузов для повторения
     if (todayJuzList.length === 0) {
+      const baseJuzCount = calculateBaseJuzCount(lastMemorizedPage);
+      const totalKnownJuz = baseJuzCount + extraJuzList.length;
+
       const message = `
-📅 План на сегодня
+📅 *План на сегодня*
 
-🎯 Нет джузов для повторения.
+🎯 *Нет джузов для повторения*
 
-📊 Ваш прогресс:
-• Выучено страниц: ${lastMemorizedPage}/${TOTAL_PAGES}
-• Всего джузов: ${totalKnownJuz}/30
+📊 *Ваш прогресс:*
+• Выучено страниц: *${lastMemorizedPage}/${TOTAL_PAGES}*
+• Всего джузов: *${totalKnownJuz}/30*
 
-Используйте кнопку "➕ Добавить страницу" или обновите настройки.
+👉 Нажмите "➕ Добавить страницу" чтобы продолжить
       `;
 
-      const sentMessage = await ctx.reply(message, mainKeyboard);
+      const sentMessage = await ctx.replyWithMarkdown(message, mainKeyboard);
 
-      // Обновляем дату последнего плана
       user.lastPlanDate = today;
       user.dailyPlanMessageId = sentMessage.message_id;
       await user.save();
-
       return;
     }
 
@@ -396,29 +454,6 @@ async function sendDailyQuranPlan(ctx) {
     const PAGES_PER_DAY = PAGES_IN_JUZ * juzPerDay;
     allPages = allPages.slice(0, PAGES_PER_DAY);
 
-    if (allPages.length === 0) {
-      const message = `
-📅 План на сегодня
-
-🎯 Нет страниц для повторения.
-
-📊 Ваш прогресс:
-• Выучено страниц: ${lastMemorizedPage}/${TOTAL_PAGES}
-• Всего джузов: ${totalKnownJuz}/30
-
-Продолжайте учить новые страницы!
-      `;
-
-      const sentMessage = await ctx.reply(message, mainKeyboard);
-
-      // Обновляем дату последнего плана
-      user.lastPlanDate = today;
-      user.dailyPlanMessageId = sentMessage.message_id;
-      await user.save();
-
-      return;
-    }
-
     // Распределяем по намазам
     const namazPlan = [];
     const pagesPerNamaz = Math.ceil(allPages.length / 5);
@@ -440,13 +475,15 @@ async function sendDailyQuranPlan(ctx) {
       }
     }
 
-    // Формируем номера джузов
+    // Формируем сообщение
+    const baseJuzCount = calculateBaseJuzCount(lastMemorizedPage);
+    const totalKnownJuz = baseJuzCount + extraJuzList.length;
+
     const juzNumbers = todayJuzList
       .map((juz) => {
         if (juz.isExtra) {
           return `${juz.number} (доп.)`;
         }
-
         const isFullyMemorized = isJuzFullyMemorized(
           juz.number,
           lastMemorizedPage,
@@ -456,39 +493,46 @@ async function sendDailyQuranPlan(ctx) {
       })
       .join(", ");
 
-    const message = `📅 План на сегодня
+    const message = `
+📅 *ПЛАН НА СЕГОДНЯ*
 
-🎯 Джузы: ${juzNumbers}
-📄 Страниц: ${allPages.length}
+🎯 *Джузы для повторения:*
+${juzNumbers}
 
+📄 *Страницы:* ${allPages.length}
+
+🕌 *По намазам:*
 ${namazPlan
-  .map((item) => `${item.name}: стр. ${item.from}–${item.to}`)
+  .map((item) => `• ${item.name}: стр. ${item.from}–${item.to}`)
   .join("\n")}
 
-📊 Прогресс: ${lastMemorizedPage}/${TOTAL_PAGES} стр.
-🎯 Джузов: ${totalKnownJuz}/30`;
+📊 *Ваш прогресс:*
+• Страниц: ${lastMemorizedPage}/${TOTAL_PAGES}
+• Джузов: ${totalKnownJuz}/30
+• Джузов в день: ${juzPerDay}
+
+_План автоматически обновляется каждый день_
+    `;
 
     try {
       // Открепляем предыдущее сообщение
       if (user.dailyPlanMessageId) {
         try {
           await ctx.unpinChatMessage(user.dailyPlanMessageId);
-        } catch (error) {
-          // Игнорируем ошибку
-        }
+        } catch (error) {}
       }
 
       // Отправляем новое сообщение
-      const sentMessage = await ctx.reply(message, mainKeyboard);
+      const sentMessage = await ctx.replyWithMarkdown(message, mainKeyboard);
 
-      // Закрепляем новое сообщение
+      // Закрепляем
       try {
         await ctx.pinChatMessage(sentMessage.message_id);
       } catch (error) {
         console.log("Не удалось закрепить сообщение:", error.message);
       }
 
-      // Обновляем данные пользователя
+      // Обновляем данные
       if (todayJuzList.length > 0) {
         user.lastJuzUsed = todayJuzList[todayJuzList.length - 1].number;
       }
@@ -497,21 +541,15 @@ ${namazPlan
       await user.save();
     } catch (error) {
       console.error("Ошибка отправки плана:", error);
-      await ctx.reply(
-        "⚠️ Произошла ошибка при отправке плана. Попробуйте снова.",
-        mainKeyboard
-      );
+      await ctx.reply("⚠️ Произошла ошибка. Попробуйте снова.", mainKeyboard);
     }
   } catch (error) {
-    console.error("Критическая ошибка в sendDailyQuranPlan:", error);
-    await ctx.reply(
-      "❌ Произошла критическая ошибка. Пожалуйста, попробуйте позже.",
-      mainKeyboard
-    );
+    console.error("Ошибка в sendDailyQuranPlan:", error);
+    await ctx.reply("❌ Произошла ошибка. Попробуйте позже.", mainKeyboard);
   }
 }
 
-// Статистические функции
+// 📊 СТАТИСТИКА
 async function recordDailyStats(
   user,
   lastMemorizedPage,
@@ -523,7 +561,6 @@ async function recordDailyStats(
     const baseJuzCount = calculateBaseJuzCount(lastMemorizedPage);
     const totalJuzCount = baseJuzCount + extraJuzList.length;
 
-    // Получаем вчерашнюю статистику
     const yesterday = moment().subtract(1, "day").format("YYYY-MM-DD");
     const yesterdayStat = await DailyStat.findOne({
       where: {
@@ -536,7 +573,6 @@ async function recordDailyStats(
     const progressToday = Math.max(0, lastMemorizedPage - previousPages);
     const pagesRepeatedToday = PAGES_IN_JUZ * juzPerDay;
 
-    // Создаем или обновляем запись за сегодня
     await DailyStat.upsert({
       userId: user.telegramId,
       date: today,
@@ -552,69 +588,7 @@ async function recordDailyStats(
   }
 }
 
-async function getStatsSummary(user) {
-  try {
-    const weekAgo = moment().subtract(7, "days").format("YYYY-MM-DD");
-
-    const stats = await DailyStat.findAll({
-      where: {
-        userId: user.telegramId,
-        date: { [Op.gte]: weekAgo },
-      },
-      order: [["date", "ASC"]],
-    });
-
-    if (stats.length === 0) {
-      return "📈 Сегодня первый день отслеживания!";
-    }
-
-    let summary = "";
-
-    // Прогресс за неделю
-    const weekProgress = stats.reduce(
-      (sum, stat) => sum + (stat.dailyProgress || 0),
-      0
-    );
-    const weekRepeated = stats.reduce(
-      (sum, stat) => sum + (stat.pagesRepeated || 0),
-      0
-    );
-
-    summary += `📅 За неделю:\n`;
-    summary += `• Новых: +${weekProgress} стр.\n`;
-    summary += `• Повторено: ${weekRepeated} стр.`;
-
-    return summary;
-  } catch (error) {
-    console.error("Ошибка в getStatsSummary:", error);
-    return "Не удалось загрузить статистику";
-  }
-}
-
-// Вспомогательные функции
-async function getUser(telegramId) {
-  try {
-    let user = await User.findByPk(telegramId);
-
-    if (!user) {
-      user = await User.create({
-        telegramId: telegramId,
-        lastMemorizedPage: 0,
-        lastJuzUsed: 0,
-        extraJuzList: "[]",
-        juzPerDay: 1,
-        lastPlanDate: null,
-      });
-    }
-
-    return user;
-  } catch (error) {
-    console.error("Ошибка в getUser:", error);
-    throw error;
-  }
-}
-
-// Функция для получения информации о текущем прогрессе в джузе
+// Функция для получения информации о текущем прогрессе
 function getCurrentJuzProgress(lastMemorizedPage) {
   if (lastMemorizedPage === 0) {
     return { juzNumber: 1, pagesInJuz: 0, totalPagesInJuz: 19 };
@@ -632,7 +606,6 @@ function getCurrentJuzProgress(lastMemorizedPage) {
     totalPagesInJuz = 19;
   } else {
     juzNumber = Math.floor((lastMemorizedPage - 1) / PAGES_IN_JUZ);
-
     if (juzNumber === 30) {
       const startPage30 = 29 * PAGES_IN_JUZ + 1;
       pagesInJuz = lastMemorizedPage - startPage30 + 1;
@@ -647,12 +620,233 @@ function getCurrentJuzProgress(lastMemorizedPage) {
   return { juzNumber, pagesInJuz, totalPagesInJuz };
 }
 
+async function saveUserAction(userId, actionData) {
+  try {
+    await UserAction.create({
+      userId: userId,
+      actionType: actionData.actionType,
+      previousValue: actionData.previousValue,
+      newValue: actionData.newValue,
+      previousExtraJuzList: actionData.previousExtraJuzList,
+      newExtraJuzList: actionData.newExtraJuzList,
+    });
+  } catch (error) {
+    console.error("Ошибка сохранения действия:", error);
+  }
+}
+
+async function getLastUserAction(userId) {
+  try {
+    return await UserAction.findOne({
+      where: { userId: userId },
+      order: [["actionDate", "DESC"]],
+    });
+  } catch (error) {
+    console.error("Ошибка получения действия:", error);
+    return null;
+  }
+}
+
+async function undoLastAction(ctx) {
+  try {
+    const user = ctx.user;
+    const lastAction = await getLastUserAction(user.telegramId);
+
+    if (!lastAction) {
+      await ctx.reply(
+        "❌ *Нет действий для отмены*\n\nВы еще ничего не меняли.",
+        mainKeyboard
+      );
+      return;
+    }
+
+    let success = false;
+    let message = "";
+
+    switch (lastAction.actionType) {
+      case "ADD_PAGE":
+        // Возвращаем предыдущее количество страниц
+        if (lastAction.previousValue !== null) {
+          user.lastMemorizedPage = lastAction.previousValue;
+          user.lastPlanDate = null; // Сбрасываем план для пересчета
+          await user.save();
+
+          // Записываем статистику
+          await recordDailyStats(
+            user,
+            lastAction.previousValue,
+            getExtraJuzList(user.extraJuzList),
+            user.juzPerDay
+          );
+
+          success = true;
+          message = `✅ *Отменено добавление страницы*\n\nВозвращено: ${lastAction.previousValue} стр.\nТекущее: ${user.lastMemorizedPage} стр.`;
+        }
+        break;
+
+      case "UPDATE_PAGES_MANUAL":
+        // Возвращаем предыдущее количество страниц
+        if (lastAction.previousValue !== null) {
+          user.lastMemorizedPage = lastAction.previousValue;
+          user.lastPlanDate = null;
+          await user.save();
+
+          await recordDailyStats(
+            user,
+            lastAction.previousValue,
+            getExtraJuzList(user.extraJuzList),
+            user.juzPerDay
+          );
+
+          success = true;
+          message = `✅ *Отменено изменение страниц*\n\nВозвращено: ${lastAction.previousValue} стр.\nТекущее: ${user.lastMemorizedPage} стр.`;
+        }
+        break;
+
+      case "SET_JUZ_PER_DAY":
+        // Возвращаем предыдущее количество джузов в день
+        if (lastAction.previousValue !== null) {
+          user.juzPerDay = lastAction.previousValue;
+          user.lastPlanDate = null;
+          await user.save();
+
+          success = true;
+          message = `✅ *Отменено изменение джузов в день*\n\nВозвращено: ${
+            lastAction.previousValue
+          } джуз${lastAction.previousValue > 1 ? "а" : ""}\nТекущее: ${
+            user.juzPerDay
+          } джуз${user.juzPerDay > 1 ? "а" : ""}`;
+        }
+        break;
+
+      case "ADD_EXTRA_JUZ":
+        // Возвращаем предыдущий список джузов
+        if (lastAction.previousExtraJuzList) {
+          user.extraJuzList = lastAction.previousExtraJuzList;
+          user.lastPlanDate = null;
+          await user.save();
+
+          const currentList = getExtraJuzList(lastAction.previousExtraJuzList);
+          success = true;
+          message = `✅ *Отменено добавление джузов*\n\nВозвращен предыдущий список.\nТекущие джузы: ${
+            currentList.length > 0 ? currentList.join(", ") : "нет"
+          }`;
+        }
+        break;
+
+      case "REMOVE_EXTRA_JUZ":
+        // Возвращаем предыдущий список джузов
+        if (lastAction.previousExtraJuzList) {
+          user.extraJuzList = lastAction.previousExtraJuzList;
+          user.lastPlanDate = null;
+          await user.save();
+
+          const currentList = getExtraJuzList(lastAction.previousExtraJuzList);
+          success = true;
+          message = `✅ *Отменено удаление джузов*\n\nВозвращен предыдущий список.\nТекущие джузы: ${
+            currentList.length > 0 ? currentList.join(", ") : "нет"
+          }`;
+        }
+        break;
+
+      case "CLEAR_EXTRA_JUZ":
+        // Возвращаем предыдущий список джузов
+        if (lastAction.previousExtraJuzList) {
+          user.extraJuzList = lastAction.previousExtraJuzList;
+          user.lastPlanDate = null;
+          await user.save();
+
+          const currentList = getExtraJuzList(lastAction.previousExtraJuzList);
+          success = true;
+          message = `✅ *Отменено очищение списка*\n\nВозвращены все джузы.\nТекущие джузы: ${
+            currentList.length > 0 ? currentList.join(", ") : "нет"
+          }`;
+        }
+        break;
+
+      default:
+        message = "❌ *Неизвестный тип действия для отмены*";
+    }
+
+    if (success) {
+      // Удаляем отмененное действие из истории
+      await lastAction.destroy();
+
+      // Обновляем план
+      message += `\n\n📅 *План на сегодня будет пересчитан.*`;
+      await ctx.replyWithMarkdown(message, mainKeyboard);
+    } else {
+      await ctx.replyWithMarkdown(message, mainKeyboard);
+    }
+  } catch (error) {
+    console.error("Ошибка в undoLastAction:", error);
+    await ctx.reply("❌ *Не удалось отменить действие*", mainKeyboard);
+  }
+}
+
+async function showActionHistory(ctx) {
+  try {
+    const user = ctx.user;
+    const actions = await UserAction.findAll({
+      where: { userId: user.telegramId },
+      order: [["actionDate", "DESC"]],
+      limit: 10,
+    });
+
+    if (actions.length === 0) {
+      await ctx.reply(
+        "📋 *История действий пуста*\n\nВы еще не совершали изменений.",
+        historyKeyboard
+      );
+      return;
+    }
+
+    let message = `📋 *Последние 10 действий:*\n\n`;
+
+    actions.forEach((action, index) => {
+      const timeAgo = moment(action.actionDate).fromNow();
+      message += `${index + 1}. ${getActionDescription(action)} (${timeAgo})\n`;
+    });
+
+    message += `\n↩️ Вы можете отменить последнее действие.`;
+
+    await ctx.replyWithMarkdown(message, historyKeyboard);
+  } catch (error) {
+    console.error("Ошибка в showActionHistory:", error);
+    await ctx.reply("❌ *Не удалось загрузить историю*", historyKeyboard);
+  }
+}
+
+// Функция для описания действия
+function getActionDescription(action) {
+  switch (action.actionType) {
+    case "ADD_PAGE":
+      return `Добавлена страница: ${action.previousValue} → ${action.newValue}`;
+    case "UPDATE_PAGES_MANUAL":
+      return `Изменены страницы: ${action.previousValue} → ${action.newValue}`;
+    case "SET_JUZ_PER_DAY":
+      return `Джузов в день: ${action.previousValue} → ${action.newValue}`;
+    case "ADD_EXTRA_JUZ":
+      const prevAdd = getExtraJuzList(action.previousExtraJuzList);
+      const newAdd = getExtraJuzList(action.newExtraJuzList);
+      return `Добавлены джузы: ${newAdd.filter(j => !prevAdd.includes(j)).join(", ")}`;
+    case "REMOVE_EXTRA_JUZ":
+      const prevRemove = getExtraJuzList(action.previousExtraJuzList);
+      const newRemove = getExtraJuzList(action.newExtraJuzList);
+      return `Удалены джузы: ${prevRemove.filter(j => !newRemove.includes(j)).join(", ")}`;
+    case "CLEAR_EXTRA_JUZ":
+      return `Очищены все доп. джузы`;
+    default:
+      return `Неизвестное действие`;
+  }
+}
+
+
 // Инициализация бота
 const bot = new Telegraf(process.env.BOT_TOKEN);
-
 bot.use(session());
 
-// Middleware для пользователя с try-catch
+// Middleware для пользователя
 bot.use(async (ctx, next) => {
   try {
     if (ctx.from) {
@@ -661,148 +855,154 @@ bot.use(async (ctx, next) => {
     await next();
   } catch (error) {
     console.error("Ошибка в middleware:", error);
-    await ctx.reply(
-      "❌ Произошла ошибка. Пожалуйста, перезапустите бота командой /start"
-    );
+    await ctx.reply("❌ Произошла ошибка. Используйте /start");
   }
 });
 
-// Команда /start
+// 📱 ОСНОВНОЕ МЕНЮ - простой интерфейс
 bot.start(async (ctx) => {
   try {
     const welcomeMessage = `
-👋 Привет, ${ctx.from.first_name}!
+👋 *Салам алейкум, ${ctx.from.first_name}!*
 
-Я помогу вам планировать повторение Корана.
+Я помогу вам систематизировать повторение Корана.
 
-📚 Особенности:
-• Учитываю, что 1-я страница (Фатиха) пропускается
-• В 30-м джузе читаем до 604 страницы
-• Создаю ежедневный план повторения
-• Веду статистику прогресса
+*🎯 Как это работает:*
+1. Укажите сколько страниц вы выучили
+2. Получайте ежедневный план повторения
+3. Добавляйте новые страницы по мере изучения
 
-🎯 Начните с кнопки "➕ Добавить страницу"!
+*📅 Основные кнопки:*
+• *План на сегодня* — ваш дневной маршрут
+• *Добавить страницу* — +1 страница к вашему прогрессу
+• *Дополнительно* — статистика и настройки
 
-Выберите действие на клавиатуре ниже 👇
+_Начните с кнопки "➕ Добавить страницу"!_
     `;
 
-    await ctx.reply(welcomeMessage, mainKeyboard);
+    await ctx.replyWithMarkdown(welcomeMessage, mainKeyboard);
   } catch (error) {
     console.error("Ошибка в команде /start:", error);
   }
 });
 
-// Обработка текстовых сообщений (кнопок)
+// 📱 ОБРАБОТКА КНОПОК - логичная структура
 bot.on("text", async (ctx) => {
   try {
     const text = ctx.message.text;
+    const user = ctx.user;
 
-    switch (text) {
-      case "📅 План на сегодня":
-        await sendDailyQuranPlan(ctx);
-        break;
+    // 🎯 ГЛАВНОЕ МЕНЮ
+    if (text === "📅 План на сегодня") {
+      await sendDailyQuranPlan(ctx);
+    } else if (text === "➕ Добавить страницу") {
+      await addOnePage(ctx);
+    } else if (text === "⚙️ Дополнительно") {
+      await showMainMenu(ctx);
+    } else if (text === "🏠 На главную") {
+      await ctx.reply("Главное меню:", mainKeyboard);
+    }
 
-      case "📊 Статистика":
-        await showStatistics(ctx);
-        break;
+    // 📊 СТАТИСТИКА МЕНЮ (добавляем новую кнопку)
+    else if (text === "📊 Моя статистика") {
+      await showSimpleStats(ctx);
+    } else if (text === "📈 Прогресс за неделю") {
+      await showWeeklyStats(ctx);
+    } else if (text === "↩️ История действий") {
+      await showActionHistory(ctx);
+    } else if (text === "📤 Экспорт данных") {
+      await exportStatistics(ctx);
+    }
 
-      case "➕ Добавить страницу":
-        await addOnePage(ctx);
-        break;
+    // 🕐 ОТМЕНА ДЕЙСТВИЙ
+    else if (text === "↩️ Отменить") {
+      await undoLastAction(ctx);
+    } else if (text === "↩️ Отменить последнее") {
+      await undoLastAction(ctx);
+    } else if (text === "📋 История действий") {
+      await showActionHistory(ctx);
+    }
 
-      case "⚙️ Настройки":
-        await showSettings(ctx);
-        break;
+    // 📊 ГЛАВНОЕ МЕНЮ ДОПОЛНИТЕЛЬНО
+    else if (text === "📊 Статистика") {
+      await showStatsMenu(ctx);
+    } else if (text === "⚙️ Настройки") {
+      await showSettings(ctx);
+    }
 
-      case "🔄 Обновить страницы":
-        await askForPagesUpdate(ctx);
-        break;
+    // ⚙️ НАСТРОЙКИ МЕНЮ
+    else if (text === "📝 Мои страницы") {
+      await showPagesMenu(ctx);
+    } else if (text === "🎯 Джузы в день") {
+      await showJuzPerDayMenu(ctx);
+    } else if (text === "📚 Доп. джузы") {
+      await showExtraJuzMenu(ctx);
+    } else if (text === "🔄 Обновить всё") {
+      await resetPlan(ctx);
+    } else if (text === "⚙️ Назад в настройки") {
+      await showSettings(ctx);
+    }
 
-      case "📝 Доп. джузы":
-        await showExtraJuzMenu(ctx);
-        break;
+    // 📝 УПРАВЛЕНИЕ СТРАНИЦАМИ
+    else if (text === "📊 Текущий прогресс") {
+      await showCurrentProgress(ctx);
+    } else if (text === "✏️ Изменить вручную") {
+      await askForManualUpdate(ctx);
+    } else if (text === "📈 Автоматический расчёт") {
+      await showAutoCalculateMenu(ctx);
+    }
 
-      case "🎯 Джузов в день":
-        await askForJuzPerDay(ctx);
-        break;
+    // 📚 УПРАВЛЕНИЕ ДЖУЗАМИ
+    else if (text === "➕ Добавить джуз") {
+      await askForExtraJuzAdd(ctx);
+    } else if (text === "🗑️ Удалить джуз") {
+      await askForExtraJuzRemove(ctx);
+    } else if (text === "📋 Список джузов") {
+      await showExtraJuzList(ctx);
+    } else if (text === "❌ Очистить всё") {
+      await clearAllExtraJuz(ctx);
+    }
 
-      case "📋 Экспорт статистики":
-        await exportStatistics(ctx);
-        break;
+    // 🎯 ВЫБОР КОЛИЧЕСТВА ДЖУЗОВ
+    else if (["1", "2", "3", "4", "5"].includes(text)) {
+      await setJuzPerDay(ctx, text);
+    }
 
-      case "➕ Добавить джузы":
-        await askForExtraJuzAdd(ctx);
-        break;
+    // 📊 ГЛАВНОЕ МЕНЮ ДОПОЛНИТЕЛЬНО
+    else if (text === "📊 Статистика") {
+      await showStatsMenu(ctx);
+    } else if (text === "⚙️ Настройки") {
+      await showSettings(ctx);
+    } else if (text === "📝 Доп. джузы") {
+      await showExtraJuzMenu(ctx);
+    } else if (text === "🎯 Джузов в день") {
+      await showJuzPerDayMenu(ctx);
+    }
 
-      case "🗑️ Удалить джузы":
-        await askForExtraJuzRemove(ctx);
-        break;
+    // 📝 ОБРАБОТКА ЧИСЕЛ (ручной ввод)
+    else if (/^\d+$/.test(text)) {
+      if (ctx.session?.awaitingManualUpdate) {
+        await updatePagesManual(ctx, parseInt(text));
+      } else if (ctx.session?.awaitingExtraJuzAdd) {
+        await addExtraJuz(ctx, text);
+      } else if (ctx.session?.awaitingExtraJuzRemove) {
+        await removeExtraJuzNumbers(ctx, text);
+      } else {
+        await ctx.reply("Используйте кнопки меню для навигации.", mainKeyboard);
+      }
+    }
 
-      case "📋 Список джузов":
-        await showExtraJuzList(ctx);
-        break;
-
-      case "❌ Очистить все":
-        await clearAllExtraJuz(ctx);
-        break;
-
-      case "🏠 Главное меню":
-        // Сбрасываем все флаги ожидания
-        if (ctx.session) {
-          ctx.session.awaitingPages = false;
-          ctx.session.awaitingExtraJuzAdd = false;
-          ctx.session.awaitingExtraJuzRemove = false;
-        }
-        await ctx.reply("Главное меню:", mainKeyboard);
-        break;
-
-      // Обработка выбора количества джузов
-      case "1 джуз":
-      case "2 джуза":
-      case "3 джуза":
-      case "4 джуза":
-      case "5 джузов":
-        await setJuzPerDay(ctx, text);
-        break;
-
-      default:
-        // Проверяем специальные команды для удаления джузов
-        if (text.startsWith("удалить ") || text.startsWith("remove ")) {
-          await removeExtraJuz(ctx, text);
-        }
-        // Проверяем, является ли сообщение числом (обновление страниц)
-        else if (/^\d+$/.test(text)) {
-          if (ctx.session?.awaitingPages) {
-            await updatePages(ctx, parseInt(text));
-          } else if (ctx.session?.awaitingExtraJuzAdd) {
-            await addExtraJuz(ctx, text);
-          } else if (ctx.session?.awaitingExtraJuzRemove) {
-            await removeExtraJuzNumbers(ctx, text);
-          } else {
-            await ctx.reply(
-              "Используйте кнопки меню для навигации.",
-              mainKeyboard
-            );
-          }
-        }
-        // Проверяем, является ли сообщение списком джузов (с запятыми)
-        else if (/^[\d\s,]+$/.test(text)) {
-          if (ctx.session?.awaitingExtraJuzAdd) {
-            await addExtraJuz(ctx, text);
-          } else if (ctx.session?.awaitingExtraJuzRemove) {
-            await removeExtraJuzNumbers(ctx, text);
-          } else {
-            await ctx.reply(
-              "Используйте кнопки меню для навигации.",
-              mainKeyboard
-            );
-          }
-        } else {
-          await ctx.reply(
-            "Используйте кнопки меню для навигации.",
-            mainKeyboard
-          );
-        }
+    // 📝 ОБРАБОТКА СПИСКОВ (с запятыми)
+    else if (/^[\d\s,]+$/.test(text)) {
+      if (ctx.session?.awaitingExtraJuzAdd) {
+        await addExtraJuz(ctx, text);
+      } else if (ctx.session?.awaitingExtraJuzRemove) {
+        await removeExtraJuzNumbers(ctx, text);
+      } else {
+        await ctx.reply("Используйте кнопки меню для навигации.", mainKeyboard);
+      }
+    } else {
+      await ctx.reply("Используйте кнопки меню для навигации.", mainKeyboard);
     }
   } catch (error) {
     console.error("Ошибка обработки текста:", error);
@@ -810,7 +1010,8 @@ bot.on("text", async (ctx) => {
   }
 });
 
-// Функция добавления одной страницы
+// 🎯 ОСНОВНЫЕ ФУНКЦИИ
+
 async function addOnePage(ctx) {
   try {
     const user = ctx.user;
@@ -818,21 +1019,26 @@ async function addOnePage(ctx) {
 
     if (currentPage >= TOTAL_PAGES) {
       await ctx.reply(
-        `🎉 Поздравляем! Вы выучили весь Коран - все ${TOTAL_PAGES} страниц!`,
+        `🎉 *МАШААЛЛАХ!* Вы выучили весь Коран!\n\nВсе ${TOTAL_PAGES} страниц изучены.`,
         mainKeyboard
       );
       return;
     }
 
     const newPageCount = currentPage + 1;
-    user.lastMemorizedPage = newPageCount;
-    await user.save();
 
-    // Сбрасываем дату последнего плана, так как прогресс изменился
+    // Сохраняем действие
+    await saveUserAction(user.telegramId, {
+      actionType: "ADD_PAGE",
+      previousValue: currentPage,
+      newValue: newPageCount,
+    });
+
+    user.lastMemorizedPage = newPageCount;
     user.lastPlanDate = null;
     await user.save();
 
-    // Записываем статистику
+    // Статистика
     await recordDailyStats(
       user,
       newPageCount,
@@ -850,44 +1056,73 @@ async function addOnePage(ctx) {
     let message = "";
 
     if (juzNumber === 30 && pagesInJuz === totalPagesInJuz) {
-      message = `🎉 МАШААЛЛАХ! Вы завершили 30-й джуз и весь Коран!\n\n`;
+      message = `🎉 *МАШААЛЛАХ!* Вы завершили 30-й джуз и весь Коран!\n\n`;
     } else if (pagesInJuz === totalPagesInJuz) {
-      message = `🎉 МАШААЛЛАХ! Вы завершили джуз ${juzNumber}!\n\n`;
+      message = `🎉 *МАШААЛЛАХ!* Вы завершили джуз ${juzNumber}!\n\n`;
     }
 
-    message += `✅ Добавлена 1 страница
+    message += `✅ *Добавлена 1 страница*
 
-📊 Ваш прогресс:
-• Страниц: ${newPageCount}/${TOTAL_PAGES}
-• Джузов: ${totalJuzCount}/30
+📊 *Прогресс:*
+• Страниц: *${newPageCount}/${TOTAL_PAGES}*
+• Джузов: *${totalJuzCount}/30*
 
-🎯 Джуз ${juzNumber}: ${pagesInJuz}/${totalPagesInJuz} стр.`;
+🎯 *Джуз ${juzNumber}:* ${pagesInJuz}/${totalPagesInJuz} стр.`;
 
     if (pagesInJuz === totalPagesInJuz && juzNumber < 30) {
       const nextJuz = juzNumber + 1;
-      if (nextJuz === 1) {
-        message += `\n\n📖 Следующий: джуз 1 (со 2-й страницы)`;
-      } else if (nextJuz === 30) {
-        message += `\n\n📖 Следующий: джуз 30 (до 604 стр.)`;
-      } else {
-        message += `\n\n📖 Следующий: джуз ${nextJuz}`;
-      }
+      message += `\n\n📖 *Следующий:* джуз ${nextJuz}`;
     }
 
-    message += `\n\n📅 Теперь план на сегодня будет обновлен!`;
+    message += `\n\n📅 *План на сегодня обновлен!*\n\n↩️ Можно отменить действие.`;
 
-    await ctx.reply(message, mainKeyboard);
+    await ctx.replyWithMarkdown(message, mainKeyboard);
   } catch (error) {
     console.error("Ошибка в addOnePage:", error);
-    await ctx.reply(
-      "❌ Не удалось добавить страницу. Попробуйте снова.",
-      mainKeyboard
-    );
+    await ctx.reply("❌ Не удалось добавить страницу.", mainKeyboard);
   }
 }
 
-// Функция показа статистики
-async function showStatistics(ctx) {
+// 📊 МЕНЮ СТАТИСТИКИ
+async function showMainMenu(ctx) {
+  const message = `
+⚙️ *Дополнительные возможности*
+
+Выберите раздел:
+
+*📊 Статистика* — ваш прогресс и достижения
+*⚙️ Настройки* — управление параметрами
+
+Или вернитесь в главное меню:
+  `;
+
+  await ctx.replyWithMarkdown(
+    message,
+    Markup.keyboard([
+      ["📊 Статистика", "⚙️ Настройки"],
+      ["🏠 На главную"],
+    ]).resize()
+  );
+}
+
+async function showStatsMenu(ctx) {
+  const message = `
+📊 *Статистика и аналитика*
+
+Здесь вы можете отслеживать свой прогресс:
+
+*📊 Моя статистика* — общий прогресс
+*📈 Прогресс за неделю* — динамика за 7 дней
+*↩️ История действий* — просмотр и отмена изменений
+*📤 Экспорт данных* — скачать историю в CSV
+
+Выберите действие:
+  `;
+
+  await ctx.replyWithMarkdown(message, statsKeyboard);
+}
+
+async function showSimpleStats(ctx) {
   try {
     const user = ctx.user;
     const extraJuzList = getExtraJuzList(user.extraJuzList);
@@ -898,167 +1133,410 @@ async function showStatistics(ctx) {
       user.lastMemorizedPage
     );
 
-    const stats = await getStatsSummary(user);
+    // Получаем статистику за неделю
+    const weekAgo = moment().subtract(7, "days").format("YYYY-MM-DD");
+    const weekStats = await DailyStat.findAll({
+      where: {
+        userId: user.telegramId,
+        date: { [Op.gte]: weekAgo },
+      },
+      order: [["date", "ASC"]],
+    });
+
+    let weekSummary = "";
+    if (weekStats.length > 0) {
+      const weekProgress = weekStats.reduce(
+        (sum, stat) => sum + (stat.dailyProgress || 0),
+        0
+      );
+      const weekRepeated = weekStats.reduce(
+        (sum, stat) => sum + (stat.pagesRepeated || 0),
+        0
+      );
+
+      weekSummary = `
+📈 *За неделю:*
+• Новых страниц: *+${weekProgress}*
+• Повторено: *${weekRepeated}* стр.
+      `;
+    }
 
     const message = `
-📊 Ваша статистика
+📊 *Ваша статистика*
 
-📈 Прогресс:
-• Страниц: ${user.lastMemorizedPage}/${TOTAL_PAGES}
-• Базовых джузов: ${baseJuzCount}
-• Доп. джузов: ${extraJuzList.length}
-• Всего джузов: ${totalJuzCount}/30
-• Джузов в день: ${user.juzPerDay}
+📈 *Прогресс:*
+• Страниц: *${user.lastMemorizedPage}/${TOTAL_PAGES}*
+• Базовых джузов: *${baseJuzCount}*
+• Доп. джузов: *${extraJuzList.length}*
+• Всего джузов: *${totalJuzCount}/30*
+• Джузов в день: *${user.juzPerDay}*
 
-🎯 Текущий джуз ${juzNumber}: ${pagesInJuz}/${totalPagesInJuz} стр.
+🎯 *Текущий джуз ${juzNumber}:*
+${pagesInJuz}/${totalPagesInJuz} стр.
 
-${stats}
+${weekSummary}
+
+_Данные обновляются автоматически_
     `;
 
-    await ctx.reply(message, mainKeyboard);
+    await ctx.replyWithMarkdown(message, statsKeyboard);
   } catch (error) {
-    console.error("Ошибка в showStatistics:", error);
-    await ctx.reply("❌ Не удалось загрузить статистику.", mainKeyboard);
+    console.error("Ошибка в showSimpleStats:", error);
+    await ctx.reply("❌ Не удалось загрузить статистику.", statsKeyboard);
   }
 }
 
-// Функция показа настроек
-async function showSettings(ctx) {
+async function showWeeklyStats(ctx) {
   try {
     const user = ctx.user;
-    const extraJuzList = getExtraJuzList(user.extraJuzList);
+    const weekAgo = moment().subtract(7, "days").format("YYYY-MM-DD");
 
-    const { juzNumber, pagesInJuz, totalPagesInJuz } = getCurrentJuzProgress(
-      user.lastMemorizedPage
+    const stats = await DailyStat.findAll({
+      where: {
+        userId: user.telegramId,
+        date: { [Op.gte]: weekAgo },
+      },
+      order: [["date", "ASC"]],
+    });
+
+    if (stats.length === 0) {
+      await ctx.reply(
+        "📊 *Пока нет данных за неделю*\n\nДобавьте несколько страниц для отслеживания прогресса.",
+        statsKeyboard
+      );
+      return;
+    }
+
+    let message = `📈 *Прогресс за 7 дней*\n\n`;
+
+    stats.forEach((stat) => {
+      const date = moment(stat.date).format("DD.MM");
+      message += `*${date}:*\n`;
+      message += `• Новых: ${stat.dailyProgress || 0} стр.\n`;
+      message += `• Повторено: ${stat.pagesRepeated || 0} стр.\n`;
+      message += `• Всего: ${stat.pagesMemorized} стр.\n\n`;
+    });
+
+    const totalProgress = stats.reduce(
+      (sum, stat) => sum + (stat.dailyProgress || 0),
+      0
+    );
+    const totalRepeated = stats.reduce(
+      (sum, stat) => sum + (stat.pagesRepeated || 0),
+      0
     );
 
-    const message = `
-⚙️ Настройки
+    message += `*Итого за неделю:*\n`;
+    message += `• Новых страниц: *+${totalProgress}*\n`;
+    message += `• Повторено: *${totalRepeated}* стр.\n`;
+    message += `• Среднее в день: *${Math.round(
+      totalRepeated / stats.length
+    )}* стр.`;
 
-📄 Выучено: ${user.lastMemorizedPage} стр.
-🎯 Джузов в день: ${user.juzPerDay}
-📚 Доп. джузы: ${extraJuzList.length > 0 ? extraJuzList.join(", ") : "нет"}
-
-🎯 Текущий джуз ${juzNumber}: ${pagesInJuz}/${totalPagesInJuz} стр.
-
-Выберите параметр для изменения:
-    `;
-
-    await ctx.reply(message, settingsKeyboard);
+    await ctx.replyWithMarkdown(message, statsKeyboard);
   } catch (error) {
-    console.error("Ошибка в showSettings:", error);
-    await ctx.reply("❌ Не удалось загрузить настройки.", mainKeyboard);
+    console.error("Ошибка в showWeeklyStats:", error);
+    await ctx.reply("❌ Не удалось загрузить статистику.", statsKeyboard);
   }
 }
 
-// Функция запроса обновления страниц
-async function askForPagesUpdate(ctx) {
+// ⚙️ МЕНЮ НАСТРОЕК
+async function showSettings(ctx) {
+  const user = ctx.user;
+  const extraJuzList = getExtraJuzList(user.extraJuzList);
+
+  const message = `
+⚙️ *Настройки*
+
+Текущие параметры:
+• Выучено страниц: *${user.lastMemorizedPage}*
+• Джузов в день: *${user.juzPerDay}*
+• Доп. джузов: *${extraJuzList.length}*
+
+Выберите параметр для изменения:
+  `;
+
+  await ctx.replyWithMarkdown(message, settingsKeyboard);
+}
+
+async function showPagesMenu(ctx) {
+  const user = ctx.user;
+  const { juzNumber, pagesInJuz, totalPagesInJuz } = getCurrentJuzProgress(
+    user.lastMemorizedPage
+  );
+
+  const message = `
+📝 *Управление страницами*
+
+Текущий прогресс:
+• Выучено: *${user.lastMemorizedPage}* стр.
+• Джуз ${juzNumber}: *${pagesInJuz}/${totalPagesInJuz}* стр.
+
+Выберите действие:
+  `;
+
+  await ctx.replyWithMarkdown(message, pagesUpdateKeyboard);
+}
+
+async function showCurrentProgress(ctx) {
+  const user = ctx.user;
+  const { juzNumber, pagesInJuz, totalPagesInJuz } = getCurrentJuzProgress(
+    user.lastMemorizedPage
+  );
+  const baseJuzCount = calculateBaseJuzCount(user.lastMemorizedPage);
+  const extraJuzList = getExtraJuzList(user.extraJuzList);
+  const totalJuzCount = baseJuzCount + extraJuzList.length;
+
+  const message = `
+📊 *Текущий прогресс*
+
+*Основные показатели:*
+• Выучено страниц: *${user.lastMemorizedPage}/${TOTAL_PAGES}*
+• Всего джузов: *${totalJuzCount}/30*
+• Джузов в день: *${user.juzPerDay}*
+
+*Текущий джуз ${juzNumber}:*
+${pagesInJuz}/${totalPagesInJuz} стр.
+
+*Расчетные данные:*
+• Базовых джузов: ${baseJuzCount}
+• Доп. джузов: ${extraJuzList.length}
+${
+  extraJuzList.length > 0
+    ? `• Список доп. джузов: ${extraJuzList.join(", ")}`
+    : ""
+}
+
+_Используйте "✏️ Изменить вручную" для корректировки_
+  `;
+
+  await ctx.replyWithMarkdown(message, pagesUpdateKeyboard);
+}
+
+async function askForManualUpdate(ctx) {
   try {
     const user = ctx.user;
 
     if (!ctx.session) ctx.session = {};
-    ctx.session.awaitingPages = true;
+    ctx.session.awaitingManualUpdate = true;
 
-    await ctx.reply(
-      `Введите количество выученных страниц (от 1 до ${TOTAL_PAGES}):\n\nТекущее: ${user.lastMemorizedPage} стр.\n\nИспользуйте "🏠 Главное меню" для отмены`,
-      Markup.removeKeyboard()
+    const message = `
+✏️ *Ручное обновление страниц*
+
+Текущее значение: *${user.lastMemorizedPage}* стр.
+
+Введите новое количество выученных страниц (от 1 до ${TOTAL_PAGES}):
+
+_Например: 150_
+
+Или нажмите "⚙️ Назад в настройки" для отмены
+    `;
+
+    await ctx.replyWithMarkdown(
+      message,
+      Markup.keyboard([["⚙️ Назад в настройки"]]).resize()
     );
   } catch (error) {
-    console.error("Ошибка в askForPagesUpdate:", error);
-    await ctx.reply("❌ Произошла ошибка.", mainKeyboard);
+    console.error("Ошибка в askForManualUpdate:", error);
+    await ctx.reply("❌ Произошла ошибка.", settingsKeyboard);
   }
 }
 
-// Функция обновления страниц
-async function updatePages(ctx, pages) {
+async function updatePagesManual(ctx, pages) {
   try {
     if (isNaN(pages) || pages < 0 || pages > TOTAL_PAGES) {
-      await ctx.reply(`Введите число от 0 до ${TOTAL_PAGES}`, mainKeyboard);
+      await ctx.reply(
+        `❌ Введите число от 0 до ${TOTAL_PAGES}`,
+        settingsKeyboard
+      );
       return;
     }
 
-    ctx.user.lastMemorizedPage = pages;
+    const user = ctx.user;
+    const previousPages = user.lastMemorizedPage;
 
-    // Сбрасываем дату последнего плана, так как прогресс изменился
-    ctx.user.lastPlanDate = null;
-    await ctx.user.save();
+    // Сохраняем действие
+    await saveUserAction(user.telegramId, {
+      actionType: "UPDATE_PAGES_MANUAL",
+      previousValue: previousPages,
+      newValue: pages,
+    });
 
-    // Записываем статистику
+    user.lastMemorizedPage = pages;
+    user.lastPlanDate = null;
+    await user.save();
+
+    // Статистика
     await recordDailyStats(
-      ctx.user,
+      user,
       pages,
-      getExtraJuzList(ctx.user.extraJuzList),
-      ctx.user.juzPerDay
+      getExtraJuzList(user.extraJuzList),
+      user.juzPerDay
     );
 
     if (ctx.session) {
-      ctx.session.awaitingPages = false;
+      ctx.session.awaitingManualUpdate = false;
     }
 
-    await ctx.reply(
-      `✅ Установлено ${pages} выученных страниц\n\n📅 Теперь план на сегодня будет обновлен!`,
-      mainKeyboard
-    );
+    const message = `
+✅ *Обновлено!*
+
+Новое количество страниц: *${pages}*
+
+📅 *План на сегодня будет пересчитан.*
+
+↩️ Можно отменить действие.
+    `;
+
+    await ctx.replyWithMarkdown(message, settingsKeyboard);
   } catch (error) {
-    console.error("Ошибка в updatePages:", error);
-    await ctx.reply("❌ Не удалось обновить страницы.", mainKeyboard);
+    console.error("Ошибка в updatePagesManual:", error);
+    await ctx.reply("❌ Не удалось обновить страницы.", settingsKeyboard);
   }
 }
 
-// Функция показа меню дополнительных джузов
-async function showExtraJuzMenu(ctx) {
+async function showAutoCalculateMenu(ctx) {
+  const message = `
+📈 *Автоматический расчет*
+
+Эта функция поможет вам определить, сколько страниц вы выучили на основе известных джузов.
+
+*Как это работает:*
+1. Укажите последний полностью выученный джуз
+2. Укажите текущий джуз и сколько в нем страниц
+3. Система рассчитает общее количество страниц
+
+*Пример:*
+• Последний полный джуз: 5
+• Текущий джуз: 6
+• Страниц в текущем: 12
+• Итого: 5×20 + 12 = 112 страниц
+
+_Эта функция будет добавлена в следующем обновлении_
+
+Пока используйте ручное обновление страниц
+  `;
+
+  await ctx.replyWithMarkdown(message, pagesUpdateKeyboard);
+}
+
+// 🎯 НАСТРОЙКА ДЖУЗОВ В ДЕНЬ
+async function showJuzPerDayMenu(ctx) {
+  const user = ctx.user;
+
+  const message = `
+🎯 *Джузов в день*
+
+Текущее значение: *${user.juzPerDay}* джуз${
+    user.juzPerDay > 1 ? "а" : ""
+  } в день
+
+Это примерно *${user.juzPerDay * PAGES_IN_JUZ}* страниц ежедневно.
+
+*Рекомендации:*
+• 1 джуз (20 стр.) — стандартный темп
+• 2 джуза (40 стр.) — активное повторение
+• 3+ джуза — для опытных хафизов
+
+Выберите новое значение:
+  `;
+
+  await ctx.replyWithMarkdown(message, juzCountKeyboard);
+}
+
+async function setJuzPerDay(ctx, text) {
   try {
-    const user = ctx.user;
-    const extraJuzList = getExtraJuzList(user.extraJuzList);
+    const juzPerDay = parseInt(text);
 
-    let message = `📝 Управление дополнительными джузами\n\n`;
+    if (!isNaN(juzPerDay) && juzPerDay >= 1 && juzPerDay <= 5) {
+      const user = ctx.user;
+      const previousJuzPerDay = user.juzPerDay;
 
-    if (extraJuzList.length > 0) {
-      message += `📋 Текущие джузы: ${extraJuzList.join(", ")}\n\n`;
-    } else {
-      message += `📋 Дополнительных джузов пока нет\n\n`;
+      // Сохраняем действие
+      await saveUserAction(user.telegramId, {
+        actionType: "SET_JUZ_PER_DAY",
+        previousValue: previousJuzPerDay,
+        newValue: juzPerDay,
+      });
+
+      user.juzPerDay = juzPerDay;
+      user.lastPlanDate = null;
+      await user.save();
+
+      const message = `
+✅ *Обновлено!*
+
+Теперь вы будете повторять *${juzPerDay}* джуз${
+        juzPerDay > 1 ? "а" : ""
+      } в день.
+
+Это примерно *${juzPerDay * PAGES_IN_JUZ}* страниц ежедневно.
+
+📅 *План на сегодня будет пересчитан.*
+
+↩️ Можно отменить действие.
+      `;
+
+      await ctx.replyWithMarkdown(message, settingsKeyboard);
     }
-
-    message += `Выберите действие:`;
-
-    await ctx.reply(message, extraJuzKeyboard);
   } catch (error) {
-    console.error("Ошибка в showExtraJuzMenu:", error);
-    await ctx.reply("❌ Произошла ошибка.", mainKeyboard);
+    console.error("Ошибка в setJuzPerDay:", error);
+    await ctx.reply("❌ Не удалось обновить настройки.", settingsKeyboard);
   }
 }
 
-// Функция запроса добавления дополнительных джузов
+// 📚 УПРАВЛЕНИЕ ДОПОЛНИТЕЛЬНЫМИ ДЖУЗАМИ
+async function showExtraJuzMenu(ctx) {
+  const user = ctx.user;
+  const extraJuzList = getExtraJuzList(user.extraJuzList);
+
+  let message = `📚 *Дополнительные джузы*\n\n`;
+
+  if (extraJuzList.length > 0) {
+    message += `*Текущие джузы:* ${extraJuzList.join(", ")}\n\n`;
+    message += `Всего: ${extraJuzList.length} джуз${
+      extraJuzList.length > 1 ? "ов" : ""
+    }\n\n`;
+  } else {
+    message += `*Дополнительных джузов пока нет*\n\n`;
+  }
+
+  message += `Дополнительные джузы — это те, которые вы хотите повторять чаще других.\n\nВыберите действие:`;
+
+  await ctx.replyWithMarkdown(message, juzManageKeyboard);
+}
+
 async function askForExtraJuzAdd(ctx) {
   try {
     const user = ctx.user;
     const extraJuzList = getExtraJuzList(user.extraJuzList);
 
-    let message = `Введите номера джузов для добавления (1-30):`;
+    let message = `➕ *Добавить джузы*\n\n`;
 
     if (extraJuzList.length > 0) {
-      message += `\n\n📋 Текущие: ${extraJuzList.join(", ")}`;
+      message += `Текущие: ${extraJuzList.join(", ")}\n\n`;
     }
 
-    message += `\n\n💡 Примеры:\n• 5\n• 5, 10, 15\n• 1 2 3\n\n🏠 "Главное меню" - отмена`;
+    message += `Введите номера джузов (1-30):\n\n`;
+    message += `*Примеры:*\n`;
+    message += `• 5\n`;
+    message += `• 5, 10, 15\n`;
+    message += `• 1 2 3\n\n`;
+    message += `_Используйте "⚙️ Назад в настройки" для отмены_`;
 
-    // Инициализируем сессию если её нет
-    if (!ctx.session) {
-      ctx.session = {};
-    }
-
+    if (!ctx.session) ctx.session = {};
     ctx.session.awaitingExtraJuzAdd = true;
-    ctx.session.awaitingExtraJuzRemove = false;
-    ctx.session.awaitingPages = false;
 
-    await ctx.reply(message, Markup.removeKeyboard());
+    await ctx.replyWithMarkdown(
+      message,
+      Markup.keyboard([["⚙️ Назад в настройки"]]).resize()
+    );
   } catch (error) {
     console.error("Ошибка в askForExtraJuzAdd:", error);
-    await ctx.reply("❌ Произошла ошибка.", mainKeyboard);
+    await ctx.reply("❌ Произошла ошибка.", juzManageKeyboard);
   }
 }
 
-// Функция запроса удаления дополнительных джузов
 async function askForExtraJuzRemove(ctx) {
   try {
     const user = ctx.user;
@@ -1066,277 +1544,245 @@ async function askForExtraJuzRemove(ctx) {
 
     if (extraJuzList.length === 0) {
       await ctx.reply(
-        "❌ У вас нет дополнительных джузов для удаления",
-        extraJuzKeyboard
+        "❌ *Нет джузов для удаления*\n\nСначала добавьте джузы.",
+        juzManageKeyboard
       );
       return;
     }
 
-    let message = `Введите номера джузов для удаления (1-30):\n\nТекущие: ${extraJuzList.join(
-      ", "
-    )}\n\nПример: 5, 10, 15\nИспользуйте "🏠 Главное меню" для отмены`;
+    const message = `
+🗑️ *Удалить джузы*
+
+Текущие джузы: ${extraJuzList.join(", ")}
+
+Введите номера джузов для удаления:
+
+*Пример:* 5, 10, 15
+
+_Используйте "⚙️ Назад в настройки" для отмены_
+    `;
 
     if (!ctx.session) ctx.session = {};
-    ctx.session.awaitingExtraJuzAdd = false;
     ctx.session.awaitingExtraJuzRemove = true;
 
-    await ctx.reply(message, Markup.removeKeyboard());
+    await ctx.replyWithMarkdown(
+      message,
+      Markup.keyboard([["⚙️ Назад в настройки"]]).resize()
+    );
   } catch (error) {
     console.error("Ошибка в askForExtraJuzRemove:", error);
-    await ctx.reply("❌ Произошла ошибка.", mainKeyboard);
+    await ctx.reply("❌ Произошла ошибка.", juzManageKeyboard);
   }
 }
 
-// Функция показа списка дополнительных джузов
 async function showExtraJuzList(ctx) {
   try {
     const user = ctx.user;
     const extraJuzList = getExtraJuzList(user.extraJuzList);
 
     if (extraJuzList.length === 0) {
-      await ctx.reply("📋 Дополнительных джузов пока нет", extraJuzKeyboard);
+      await ctx.reply(
+        "📋 *Список пуст*\n\nДополнительных джузов пока нет.",
+        juzManageKeyboard
+      );
       return;
     }
 
-    const message = `📋 Ваши дополнительные джузы:\n\n${extraJuzList
-      .map((juz) => `• Джуз ${juz}`)
-      .join("\n")}\n\nВсего: ${extraJuzList.length} джуз${
-      extraJuzList.length === 1 ? "" : "ов"
-    }`;
+    const message = `
+📋 *Ваши дополнительные джузы*
 
-    await ctx.reply(message, extraJuzKeyboard);
+${extraJuzList.map((juz) => `• Джуз ${juz}`).join("\n")}
+
+*Всего:* ${extraJuzList.length} джуз${extraJuzList.length > 1 ? "ов" : ""}
+
+Эти джузы будут включаться в план повторения наравне с выученными.
+    `;
+
+    await ctx.replyWithMarkdown(message, juzManageKeyboard);
   } catch (error) {
     console.error("Ошибка в showExtraJuzList:", error);
-    await ctx.reply("❌ Произошла ошибка.", mainKeyboard);
+    await ctx.reply("❌ Произошла ошибка.", juzManageKeyboard);
   }
 }
 
-// Функция добавления дополнительных джузов
 async function addExtraJuz(ctx, text) {
   try {
     const user = ctx.user;
     const existingJuzList = getExtraJuzList(user.extraJuzList);
 
-    // Обрабатываем разные форматы: "5", "5,10,15", "5 10 15"
+    // Обрабатываем разные форматы
     const juzArray = text
-      .split(/[,\s]+/) // Разделяем по запятым или пробелам
+      .split(/[,\s]+/)
       .map((item) => parseInt(item.trim()))
       .filter((juz) => !isNaN(juz) && juz >= 1 && juz <= 30);
 
     if (juzArray.length === 0) {
       await ctx.reply(
-        "❌ Неверный формат.\n\n💡 Примеры:\n• 5\n• 5, 10, 15\n• 1 2 3",
+        "❌ *Неверный формат*\n\nВведите номера от 1 до 30.",
         Markup.removeKeyboard()
       );
       return;
     }
 
-    // Объединяем существующие и новые джузы
     const newJuzList = [...new Set([...existingJuzList, ...juzArray])].sort(
       (a, b) => a - b
     );
 
-    // Проверяем, есть ли изменения
     if (newJuzList.length === existingJuzList.length) {
-      await ctx.reply(
-        "ℹ️ Эти джузы уже были добавлены ранее",
-        extraJuzKeyboard
-      );
-      if (ctx.session) {
-        ctx.session.awaitingExtraJuzAdd = false;
-      }
+      await ctx.reply("ℹ️ *Эти джузы уже добавлены*", juzManageKeyboard);
+      if (ctx.session) ctx.session.awaitingExtraJuzAdd = false;
       return;
     }
 
-    ctx.user.extraJuzList = saveExtraJuzList(newJuzList);
-    await ctx.user.save();
+    // Сохраняем действие
+    await saveUserAction(user.telegramId, {
+      actionType: "ADD_EXTRA_JUZ",
+      previousExtraJuzList: user.extraJuzList,
+      newExtraJuzList: saveExtraJuzList(newJuzList),
+    });
 
-    // Сбрасываем сессию
-    if (ctx.session) {
-      ctx.session.awaitingExtraJuzAdd = false;
-    }
+    user.extraJuzList = saveExtraJuzList(newJuzList);
+    user.lastPlanDate = null;
+    await user.save();
+
+    if (ctx.session) ctx.session.awaitingExtraJuzAdd = false;
 
     const addedCount = newJuzList.length - existingJuzList.length;
     const addedJuz = juzArray.filter((juz) => !existingJuzList.includes(juz));
 
-    const message = `✅ Добавлено ${addedCount} джуз${
-      addedCount === 1 ? "" : addedCount < 5 ? "а" : "ов"
-    }: ${addedJuz.join(
-      ", "
-    )}\n\n📋 Все дополнительные джузы:\n${newJuzList.join(", ")}`;
+    const message = `
+✅ *Добавлено ${addedCount} джуз${addedCount > 1 ? "ов" : ""}*
 
-    await ctx.reply(message, extraJuzKeyboard);
+Новые джузы: ${addedJuz.join(", ")}
+
+*Всего джузов:* ${newJuzList.join(", ")}
+
+📅 *План на сегодня будет обновлен*
+
+↩️ Можно отменить действие.
+    `;
+
+    await ctx.replyWithMarkdown(message, juzManageKeyboard);
   } catch (error) {
     console.error("Ошибка в addExtraJuz:", error);
-    await ctx.reply("❌ Не удалось добавить джузы.", extraJuzKeyboard);
+    await ctx.reply("❌ Не удалось добавить джузы.", juzManageKeyboard);
   }
 }
 
-// Функция удаления конкретных дополнительных джузов
 async function removeExtraJuzNumbers(ctx, text) {
   try {
     const user = ctx.user;
     const existingJuzList = getExtraJuzList(user.extraJuzList);
 
     const juzToRemove = text
-      .split(",")
+      .split(/[,\s]+/)
       .map((item) => parseInt(item.trim()))
       .filter((juz) => !isNaN(juz) && juz >= 1 && juz <= 30);
 
     if (juzToRemove.length === 0) {
       await ctx.reply(
-        "❌ Неверный формат. Введите номера джузов через запятую (1-30)",
-        extraJuzKeyboard
+        "❌ *Неверный формат*\n\nВведите номера от 1 до 30.",
+        juzManageKeyboard
       );
       return;
     }
 
-    // Удаляем указанные джузы
     const newJuzList = existingJuzList.filter(
       (juz) => !juzToRemove.includes(juz)
     );
 
-    // Проверяем, есть ли изменения
     if (newJuzList.length === existingJuzList.length) {
-      await ctx.reply("ℹ️ Этих джузов нет в вашем списке", extraJuzKeyboard);
+      await ctx.reply("ℹ️ *Этих джузов нет в списке*", juzManageKeyboard);
       return;
     }
 
-    ctx.user.extraJuzList = saveExtraJuzList(newJuzList);
-    await ctx.user.save();
+    // Сохраняем действие
+    await saveUserAction(user.telegramId, {
+      actionType: "REMOVE_EXTRA_JUZ",
+      previousExtraJuzList: user.extraJuzList,
+      newExtraJuzList: saveExtraJuzList(newJuzList),
+    });
 
-    // Сбрасываем сессию
-    if (ctx.session) {
-      ctx.session.awaitingExtraJuzRemove = false;
-    }
+    user.extraJuzList = saveExtraJuzList(newJuzList);
+    user.lastPlanDate = null;
+    await user.save();
+
+    if (ctx.session) ctx.session.awaitingExtraJuzRemove = false;
 
     const removedCount = existingJuzList.length - newJuzList.length;
-    let message = `✅ Удалено ${removedCount} джуз${
-      removedCount === 1 ? "" : "ов"
-    }`;
+    let message = `✅ *Удалено ${removedCount} джуз${
+      removedCount > 1 ? "ов" : ""
+    }*`;
 
     if (newJuzList.length > 0) {
-      message += `\n\n📋 Остались джузы:\n${newJuzList.join(", ")}`;
+      message += `\n\n*Остались:* ${newJuzList.join(", ")}`;
     } else {
-      message += `\n\n📋 Теперь дополнительных джузов нет`;
+      message += `\n\n*Список очищен*`;
     }
 
-    await ctx.reply(message, extraJuzKeyboard);
+    message += `\n\n📅 *План на сегодня будет обновлен*\n\n↩️ Можно отменить действие.`;
+
+    await ctx.replyWithMarkdown(message, juzManageKeyboard);
   } catch (error) {
     console.error("Ошибка в removeExtraJuzNumbers:", error);
-    await ctx.reply("❌ Не удалось удалить джузы.", extraJuzKeyboard);
+    await ctx.reply("❌ Не удалось удалить джузы.", juzManageKeyboard);
   }
 }
 
-// Функция удаления джузов по текстовой команде
-async function removeExtraJuz(ctx, text) {
-  try {
-    const user = ctx.user;
-    const existingJuzList = getExtraJuzList(user.extraJuzList);
-
-    // Извлекаем номера джузов из команды типа "удалить 1, 2, 3"
-    const numbersMatch = text.match(/\d+/g);
-
-    if (!numbersMatch || numbersMatch.length === 0) {
-      await ctx.reply(
-        "❌ Неверный формат. Используйте: удалить 1, 2, 3",
-        extraJuzKeyboard
-      );
-      return;
-    }
-
-    const juzToRemove = numbersMatch.map((num) => parseInt(num));
-
-    // Удаляем указанные джузы
-    const newJuzList = existingJuzList.filter(
-      (juz) => !juzToRemove.includes(juz)
-    );
-
-    if (newJuzList.length === existingJuzList.length) {
-      await ctx.reply("ℹ️ Этих джузов нет в вашем списке", extraJuzKeyboard);
-      return;
-    }
-
-    ctx.user.extraJuzList = saveExtraJuzList(newJuzList);
-    await ctx.user.save();
-
-    const removedCount = existingJuzList.length - newJuzList.length;
-    let message = `✅ Удалено ${removedCount} джуз${
-      removedCount === 1 ? "" : "ов"
-    }`;
-
-    if (newJuzList.length > 0) {
-      message += `\n\n📋 Остались джузы:\n${newJuzList.join(", ")}`;
-    } else {
-      message += `\n\n📋 Теперь дополнительных джузов нет`;
-    }
-
-    await ctx.reply(message, extraJuzKeyboard);
-  } catch (error) {
-    console.error("Ошибка в removeExtraJuz:", error);
-    await ctx.reply("❌ Не удалось удалить джузы.", extraJuzKeyboard);
-  }
-}
-
-// Функция очистки всех дополнительных джузов
 async function clearAllExtraJuz(ctx) {
   try {
-    ctx.user.extraJuzList = "[]";
-    await ctx.user.save();
+    const user = ctx.user;
 
-    await ctx.reply("✅ Все дополнительные джузы удалены", extraJuzKeyboard);
+    // Сохраняем действие
+    await saveUserAction(user.telegramId, {
+      actionType: "CLEAR_EXTRA_JUZ",
+      previousExtraJuzList: user.extraJuzList,
+      newExtraJuzList: "[]",
+    });
+
+    user.extraJuzList = "[]";
+    user.lastPlanDate = null;
+    await user.save();
+
+    const message = `
+✅ *Все дополнительные джузы удалены*
+
+📅 *План на сегодня будет пересчитан.*
+
+↩️ Можно отменить действие.
+    `;
+
+    await ctx.replyWithMarkdown(message, juzManageKeyboard);
   } catch (error) {
     console.error("Ошибка в clearAllExtraJuz:", error);
-    await ctx.reply("❌ Не удалось очистить джузы.", extraJuzKeyboard);
+    await ctx.reply("❌ Не удалось очистить список.", juzManageKeyboard);
   }
 }
 
-// Функция запроса количества джузов в день
-async function askForJuzPerDay(ctx) {
+// 🔄 ОБНОВЛЕНИЕ ВСЕГО
+async function resetPlan(ctx) {
   try {
-    await ctx.reply(
-      "Сколько джузов вы хотите повторять в день?\n\nРекомендуется: 1-2 джуза",
-      juzPerDayKeyboard
-    );
+    const user = ctx.user;
+    user.lastPlanDate = null; // Сбрасываем дату плана
+
+    await user.save();
+
+    const message = `
+🔄 *Все параметры обновлены*
+
+Теперь вы можете получить новый план на сегодня с учетом всех изменений.
+
+Нажмите "📅 План на сегодня" в главном меню.
+    `;
+
+    await ctx.replyWithMarkdown(message, mainKeyboard);
   } catch (error) {
-    console.error("Ошибка в askForJuzPerDay:", error);
-    await ctx.reply("❌ Произошла ошибка.", mainKeyboard);
+    console.error("Ошибка в resetPlan:", error);
+    await ctx.reply("❌ Не удалось обновить параметры.", mainKeyboard);
   }
 }
 
-// Функция установки количества джузов в день
-async function setJuzPerDay(ctx, text) {
-  try {
-    const juzPerDay = parseInt(text.charAt(0));
-
-    if (!isNaN(juzPerDay) && juzPerDay >= 1 && juzPerDay <= 5) {
-      ctx.user.juzPerDay = juzPerDay;
-      await ctx.user.save();
-
-      await ctx.reply(
-        `✅ Установлено ${juzPerDay} джуз${
-          juzPerDay === 1 ? "" : "а"
-        } в день\n\nТеперь будете повторять примерно ${
-          juzPerDay * PAGES_IN_JUZ
-        } страниц в день.`,
-        mainKeyboard
-      );
-    } else {
-      await ctx.reply(
-        "❌ Пожалуйста, используйте кнопки для выбора.",
-        mainKeyboard
-      );
-    }
-  } catch (error) {
-    console.error("Ошибка в setJuzPerDay:", error);
-    await ctx.reply(
-      "❌ Не удалось установить количество джузов.",
-      mainKeyboard
-    );
-  }
-}
-
-// Функция экспорта статистики
+// 📤 ЭКСПОРТ СТАТИСТИКИ
 async function exportStatistics(ctx) {
   try {
     const stats = await DailyStat.findAll({
@@ -1346,8 +1792,8 @@ async function exportStatistics(ctx) {
 
     if (stats.length === 0) {
       await ctx.reply(
-        "❌ У вас пока нет статистики для экспорта",
-        mainKeyboard
+        "❌ *Нет данных для экспорта*\n\nДобавьте несколько страниц для начала отслеживания.",
+        statsKeyboard
       );
       return;
     }
@@ -1368,30 +1814,55 @@ async function exportStatistics(ctx) {
         source: Buffer.from(csv, "utf8"),
         filename: `quran_stats_${moment().format("YYYY-MM-DD")}.csv`,
       },
-      mainKeyboard
+      statsKeyboard
     );
 
-    await ctx.reply("✅ Статистика экспортирована", mainKeyboard);
+    await ctx.reply(
+      "✅ *Статистика экспортирована*\n\nФайл загружен.",
+      statsKeyboard
+    );
   } catch (error) {
     console.error("Ошибка в exportStatistics:", error);
-    await ctx.reply("❌ Не удалось экспортировать статистику.", mainKeyboard);
+    await ctx.reply("❌ Не удалось экспортировать статистику.", statsKeyboard);
   }
 }
 
-// Автоматическая отправка напоминаний
+// 📝 ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+async function getUser(telegramId) {
+  try {
+    let user = await User.findByPk(telegramId);
+
+    if (!user) {
+      user = await User.create({
+        telegramId: telegramId,
+        lastMemorizedPage: 0,
+        lastJuzUsed: 0,
+        extraJuzList: "[]",
+        juzPerDay: 1,
+        lastPlanDate: null,
+        settingsMenuOpen: false,
+      });
+    }
+
+    return user;
+  } catch (error) {
+    console.error("Ошибка в getUser:", error);
+    throw error;
+  }
+}
+
+// 🕒 АВТОМАТИЧЕСКИЕ НАПОМИНАНИЯ
 const cron = require("node-cron");
 
-// Запускаем каждый день в 8:00 утра
 cron.schedule("0 8 * * *", async () => {
   try {
-    console.log("Запуск ежедневного напоминания...");
+    console.log("Отправка ежедневных напоминаний...");
 
     const users = await User.findAll();
     console.log(`Найдено пользователей: ${users.length}`);
 
     for (const user of users) {
       try {
-        // Проверяем, нужно ли отправлять план (если еще не отправляли сегодня)
         const today = moment().format("YYYY-MM-DD");
         if (user.lastPlanDate === today) {
           console.log(
@@ -1404,12 +1875,11 @@ cron.schedule("0 8 * * *", async () => {
 
         await botInstance.telegram.sendMessage(
           user.telegramId,
-          '⏰ Время для повторения Корана!\n\nНажмите "📅 План на сегодня" для получения вашего плана.',
-          mainKeyboard
+          '🕌 *Время для повторения Корана!*\n\nНажмите "📅 План на сегодня" для получения вашего дневного плана.',
+          { parse_mode: "Markdown" }
         );
 
         botInstance.stop();
-
         await new Promise((resolve) => setTimeout(resolve, 100));
       } catch (error) {
         console.error(
@@ -1419,20 +1889,20 @@ cron.schedule("0 8 * * *", async () => {
       }
     }
 
-    console.log("Ежедневное напоминание отправлено");
+    console.log("Напоминания отправлены");
   } catch (error) {
-    console.error("Критическая ошибка в cron задаче:", error);
+    console.error("Ошибка в cron задаче:", error);
   }
 });
 
-// Обработка ошибок бота
+// 🚀 ЗАПУСК БОТА
 bot.catch(async (err, ctx) => {
-  console.error("Глобальная ошибка бота:", err);
+  console.error("Ошибка бота:", err);
 
   try {
     if (ctx && ctx.reply) {
       await ctx.reply(
-        "❌ Произошла непредвиденная ошибка. Попробуйте перезапустить бота командой /start"
+        "❌ Произошла ошибка. Используйте /start для перезапуска"
       );
     }
   } catch (replyError) {
@@ -1440,11 +1910,14 @@ bot.catch(async (err, ctx) => {
   }
 });
 
-// Запуск бота
 async function startBot() {
   try {
     await sequelize.sync({ alter: true });
     console.log("✅ База данных подключена");
+
+    // Синхронизируем модель UserAction
+    await UserAction.sync({ alter: true });
+    console.log("✅ Модель истории действий синхронизирована");
 
     await bot.launch();
     console.log("✅ Бот запущен");
